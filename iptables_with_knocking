@@ -1,0 +1,119 @@
+##################################################
+## RESOURCES ##
+# https://www.digitalocean.com/community/tutorials/how-to-set-up-a-firewall-using-iptables-on-ubuntu-14-04
+# https://www.digitalocean.com/community/tutorials/how-to-configure-port-knocking-using-only-iptables-on-an-ubuntu-vps
+##################################################
+
+
+
+sudo iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT -m comment --comment "Allow existing sessions to remain live"
+#
+sudo iptables -I INPUT 1 -i lo -j ACCEPT -m comment --comment "Allow Loopback traffic"
+sudo iptables -A INPUT -s 209.139.228.33 -p tcp --dport 2200 -j ACCEPT -m comment --comment "Allow SSH from work IP"
+sudo iptables -A INPUT -s 209.139.228.33 -p tcp --dport 80 -j ACCEPT -m comment --comment "Allow HTTP from work IP"
+sudo iptables -A INPUT -s 209.139.228.33 -p tcp --dport 443 -j ACCEPT -m comment --comment "Allow HTTPS from work  IP"
+#
+sudo iptables -A INPUT -s 209.139.228.53 -p tcp --dport 2200 -j ACCEPT -m comment --comment "Allow SSH from work VPN IP"
+sudo iptables -A INPUT -s 209.139.228.53 -p tcp --dport 80 -j ACCEPT -m comment --comment "Allow HTTP from work VPN IP"
+sudo iptables -A INPUT -s 209.139.228.53 -p tcp --dport 443 -j ACCEPT -m comment --comment "Allow HTTPS from work VPN IP"
+#
+sudo iptables -A INPUT -s 69.172.145.216 -p tcp --dport 2200 -j ACCEPT -m comment --comment "Allow SSH from home IP"
+sudo iptables -A INPUT -s 69.172.145.216 -p tcp --dport 80 -j ACCEPT -m comment --comment "Allow HTTP from home IP"
+sudo iptables -A INPUT -s 209.139.228.53 -p tcp --dport 443 -j ACCEPT -m comment --comment "Allow HTTPS from work IP"
+sudo iptables -A INPUT -s 96.54.176.77 -p tcp --dport 2200 -j ACCEPT -m comment --comment "Allow SSH from work minto IP"
+#
+sudo iptables -A OUTPUT -p icmp --icmp-type 8 -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT -m comment --comment "Allow ICMP type 8 outbound"
+sudo iptables -A INPUT -p icmp --icmp-type 0 -m state --state ESTABLISHED,RELATED -j ACCEPT -m comment --comment "Allow ICMP type 0 inbound"
+sudo iptables -A INPUT -p icmp --icmp-type 8 -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT -m comment --comment "Allow ICMP type 8 inbound"
+sudo iptables -A OUTPUT -p icmp --icmp-type 0 -m state --state ESTABLISHED,RELATED -j ACCEPT -m comment --comment "Allow ICMP type 0 outbound"
+
+
+sudo iptables -A INPUT -p tcp --dport 80 -j ACCEPT -m comment --comment "Allow HTTP from anywhere.."
+
+###############  KNOCKING 
+
+
+# Add the chains we will be using
+sudo iptables -N KNOCKING
+sudo iptables -N GATE1
+sudo iptables -N GATE2
+sudo iptables -N GATE3
+sudo iptables -N PASSED
+
+## KNOCKING CHAIN ##
+# all traffic that was not handled in the above rules to our KNOCKING chain to do the actual knocking logic
+#  first set the flag for the right gate on the correct port attempt
+# drop all other packets, because any information that is sent to this chain is only looking for the matching first packet at this point
+# -------------------------------- 
+sudo iptables -A INPUT -j KNOCKING
+sudo iptables -A GATE1 -m limit --limit 10/min -j LOG --log-prefix "Knock Gate 1: " --log-level 7 -m comment --comment "Log the first gate"
+sudo iptables -A GATE1 -p tcp --dport 1111 -m recent --name AUTH1 --set -j DROP
+sudo iptables -N LOGGING -m comment --comment "Create a new chain called LOGGING"
+sudo iptables -A GATE1 -j LOGGING -m comment --comment "All the remaining incoming packets will jump to the LOGGING chain"
+sudo iptables -A LOGGING -m limit --limit 5/min -j LOG --log-prefix "IPTables-Dropped: " --log-level 7 -m comment --comment "Log the dropped incoming packets"
+sudo iptables -A LOGGING -j DROP -m comment --comment "Finally, drop all the packets that came to the LOGGING chain."
+
+
+
+## GATE 2 ##
+# processing rule to clear the 'AUTH1' chain name, so that the source IP can't have more than one chain at a time
+# assign to the correct second chain if the next port is hit..
+# pass other traffic back to the first chain where it will be dropped if it's not on the right port.
+# This is passed to the first gate for checking so that double knocks to the wrong port don't mess up the sequence of checks
+# -------------------------------- 
+sudo iptables -A GATE2 -m recent --name AUTH1 --remove
+sudo iptables -A GATE2 -m limit --limit 10/min -j LOG --log-prefix "Knock Gate 2: " --log-level y -m comment --comment "Log the second gate"
+sudo iptables -A GATE2 -p tcp --dport 2222 -m recent --name AUTH2 --set -j DROP
+sudo iptables -A GATE2 -j GATE1
+
+
+## GATE 3 ##
+# processing rule to clear the 'AUTH2' chain name, so that the source IP can't have more than one chain at a time
+#  first set the flag for the right gate on the correct port attempt
+# pass other traffic back to the first chain where it will be dropped if it's not on the right port.
+# This is passed to the first gate for checking so that double knocks to the wrong port don't mess up the sequence of checks
+# -------------------------------- 
+sudo iptables -A GATE3 -m recent --name AUTH2 --remove
+sudo iptables -A GATE3 -m limit --limit 10/min -j LOG --log-prefix "Knock Gate 3: " --log-level 7 -m comment --comment "Log the third gate"
+sudo iptables -A GATE3 -p tcp --dport 3333 -m recent --name AUTH3 --set -j DROP
+sudo iptables -A GATE3 -j GATE1
+
+
+## PASSED ##
+# This chain is used to open the SSH daemon for 5 seconds to the client that successfully knocked the correct sequence.
+# processing rule to clear the 'AUTH3' chain name, so that the source IP can't have more than one chain at a time
+# accept SSH connections from the users who have made it into this chain (ssh on port 2200)
+# pass other traffic back to the first chain where it will be dropped if it's not on the right port.
+# This is passed to the first gate for checking so that double knocks to the wrong port don't mess up the sequence of checks
+# -------------------------------- 
+sudo iptables -A PASSED -m recent --name AUTH3 --remove
+sudo iptables -A PASSED -m limit --limit 10/min -j LOG --log-prefix "Knock PASSED: " --log-level 7 -m comment --comment "Log the passing hits"
+sudo iptables -A PASSED -p tcp --dport 2200 -j ACCEPT
+sudo iptables -A GATE3 -j GATE1
+
+# we will pass traffic from clients that have successfully completed all the knocks directly into the PASSED chain.
+# they have 10 seconds to auth
+
+sudo iptables -A KNOCKING -m recent --rcheck --seconds 10 --name AUTH3 -j PASSED
+
+# Adding a 5 second expiry for each knock
+sudo iptables -A KNOCKING -m recent --rcheck --seconds 5 --name AUTH2 -j GATE3
+sudo iptables -A KNOCKING -m recent --rcheck --seconds 5 --name AUTH1 -j GATE2
+
+# we want to send all traffic that has not matched so far back to GATE1, as usual. This will catch any attempt for the first knock
+sudo iptables -A KNOCKING -j GATE1
+
+#
+sudo iptables -A INPUT -j DROP -m comment --comment "Drop all other traffic"
+
+
+# Save the rules
+sudo /etc/init.d/iptables-persistent save
+# Load the updated rules
+sudo /etc/init.d/iptables-persistent reload
+
+
+
+
+
+
