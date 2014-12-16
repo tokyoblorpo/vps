@@ -1,0 +1,32 @@
+#iptables stuff
+sudo iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT -m comment --comment "Allow existing sessions to remain live"
+#
+sudo iptables -I INPUT 1 -i lo -j ACCEPT -m comment --comment "Allow Loopback traffic"
+sudo iptables -A INPUT -s 209.139.228.33 -p tcp --dport 2200 -j ACCEPT -m comment --comment "Allow SSH from work IP"
+sudo iptables -A INPUT -s 209.139.228.33 -p tcp --dport 80 -j ACCEPT -m comment --comment "Allow HTTP from work IP"
+sudo iptables -A INPUT -s 209.139.228.33 -p tcp --dport 443 -j ACCEPT -m comment --comment "Allow HTTPS from work  IP"
+#
+sudo iptables -A INPUT -s 209.139.228.53 -p tcp --dport 2200 -j ACCEPT -m comment --comment "Allow SSH from work VPN IP"
+sudo iptables -A INPUT -s 209.139.228.53 -p tcp --dport 80 -j ACCEPT -m comment --comment "Allow HTTP from work VPN IP"
+sudo iptables -A INPUT -s 209.139.228.53 -p tcp --dport 443 -j ACCEPT -m comment --comment "Allow HTTPS from work VPN IP"
+#
+sudo iptables -A INPUT -s 69.172.145.216 -p tcp --dport 2200 -j ACCEPT -m comment --comment "Allow SSH from home IP"
+sudo iptables -A INPUT -s 69.172.145.216 -p tcp --dport 80 -j ACCEPT -m comment --comment "Allow HTTP from home IP"
+sudo iptables -A INPUT -s 209.139.228.53 -p tcp --dport 443 -j ACCEPT -m comment --comment "Allow HTTPS from work IP"
+sudo iptables -A INPUT -s 96.54.176.77 -p tcp --dport 2200 -j ACCEPT -m comment --comment "Allow SSH from work minto IP"
+#
+iptables -A OUTPUT -p icmp --icmp-type 8 -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT -m comment --comment "Allow ICMP type 8 outbound"
+iptables -A INPUT -p icmp --icmp-type 0 -m state --state ESTABLISHED,RELATED -j ACCEPT -m comment --comment "Allow ICMP type 0 inbound"
+iptables -A INPUT -p icmp --icmp-type 8 -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT -m comment --comment "Allow ICMP type 8 inbound"
+iptables -A OUTPUT -p icmp --icmp-type 0 -m state --state ESTABLISHED,RELATED -j ACCEPT -m comment --comment "Allow ICMP type 0 outbound"
+#
+iptables -N LOGGING -m comment --comment "Create a new chain called LOGGING"
+iptables -A INPUT -j LOGGING -m comment --comment "All the remaining incoming packets will jump to the LOGGING chain"
+iptables -A LOGGING -m limit --limit 5/min -j LOG --log-prefix "IPTables-Dropped: " --log-level 7 -m comment --comment "Log the dropped incoming packets"
+iptables -A LOGGING -j DROP -m comment --comment "Finally, drop all the packets that came to the LOGGING chain."
+#
+sudo iptables -A INPUT -j DROP -m comment --comment "Drop all other traffic"
+# Save the rules
+sudo /etc/init.d/iptables-persistent save
+# Load the updated rules
+sudo /etc/init.d/iptables-persistent reload
